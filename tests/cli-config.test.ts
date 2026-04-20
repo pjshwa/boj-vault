@@ -8,13 +8,13 @@ describe('resolveConfig', () => {
       cdpPort: 9222,
       output: './output',
       delay: 4,
-      only: 'reviewed',
       problem: ['1000', '2000,3000', '1000'],
       resume: false,
       limit: undefined,
     });
 
     expect(config.problemIds).toEqual([1000, 2000, 3000]);
+    expect(config.only).toBe('submissions');
   });
 
   it('잘못된 문제 번호는 거부한다', () => {
@@ -45,18 +45,34 @@ describe('resolveConfig', () => {
     ).toThrow('문제 번호를 하나 이상 지정하세요');
   });
 
-  it('profile 백업에는 문제 번호 필터를 붙일 수 없다', () => {
+  it('submissions 이외의 카테고리에는 문제 번호 필터를 붙일 수 없다', () => {
     expect(() =>
       resolveConfig({
         user: 'amsminn',
         cdpPort: 9222,
         output: './output',
         delay: 4,
-        only: 'profile',
+        only: 'reviewed',
         problem: ['1000'],
         resume: false,
         limit: undefined,
       }),
-    ).toThrow('--problem 옵션은 profile 백업과 함께 사용할 수 없습니다');
+    ).toThrow('--problem 옵션은 submissions 백업과만 함께 사용할 수 있습니다');
+  });
+
+  it('submissions 와는 함께 사용할 수 있다', () => {
+    const config = resolveConfig({
+      user: 'amsminn',
+      cdpPort: 9222,
+      output: './output',
+      delay: 4,
+      only: 'submissions',
+      problem: ['1000'],
+      resume: false,
+      limit: undefined,
+    });
+
+    expect(config.only).toBe('submissions');
+    expect(config.problemIds).toEqual([1000]);
   });
 });

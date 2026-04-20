@@ -16,7 +16,6 @@ import { scrapeBoard } from './scrapers/board.js';
 import { buildSubmissionIndex, buildMetadata } from './writers/index-builder.js';
 import { writeJson } from './writers/json-writer.js';
 import {
-  PROBLEM_FILTER_SUPPORTED_CATEGORIES,
   formatProblemIds,
   hasProblemFilter,
 } from './core/problem-filter.js';
@@ -49,8 +48,7 @@ export async function runBackup(config: BackupConfig): Promise<void> {
 
   const problemFilterActive = hasProblemFilter(config);
   const shouldRun = (category: string) =>
-    (!config.only || config.only === category) &&
-    (!problemFilterActive || PROBLEM_FILTER_SUPPORTED_CATEGORIES.has(category));
+    problemFilterActive ? category === 'submissions' : !config.only || config.only === category;
 
   const stats = {
     submissions: 0,
@@ -65,9 +63,7 @@ export async function runBackup(config: BackupConfig): Promise<void> {
   try {
     if (problemFilterActive) {
       log.info(`문제 번호 필터 활성화: ${formatProblemIds(config.problemIds ?? [])}`);
-      if (!config.only) {
-        log.info('문제 번호와 직접 연결되지 않는 profile 백업은 건너뜁니다');
-      }
+      log.info('문제 번호가 주어졌으므로 submissions만 백업합니다');
     }
 
     // 1. Profile backup

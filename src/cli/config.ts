@@ -35,8 +35,8 @@ function parseProblemIds(values?: string[]): number[] | undefined {
 
 export function resolveConfig(opts: CliOptions): BackupConfig {
   const problemIds = parseProblemIds(opts.problem);
-  if (problemIds && opts.only === 'profile') {
-    throw new Error('--problem 옵션은 profile 백업과 함께 사용할 수 없습니다');
+  if (problemIds && opts.only && opts.only !== 'submissions') {
+    throw new Error('--problem 옵션은 submissions 백업과만 함께 사용할 수 있습니다');
   }
 
   return {
@@ -44,7 +44,7 @@ export function resolveConfig(opts: CliOptions): BackupConfig {
     cdpPort: opts.cdpPort ?? 9222,
     outputDir: opts.output ?? './output',
     delay: opts.delay ?? 4,
-    only: opts.only,
+    only: problemIds ? 'submissions' : opts.only,
     problemIds,
     resume: opts.resume ?? false,
     limit: opts.limit ? Number(opts.limit) : undefined,
