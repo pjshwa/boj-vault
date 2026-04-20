@@ -336,59 +336,48 @@ describe('scrapeSubmissions — resume 점프 동작', () => {
     expect(meta.problemId).toBe(0);
   });
 
-  it('문제 번호 필터: 일반 제출만 저장하고 불일치한 대회 제출은 다음 resume에서 다시 조회하지 않는다', async () => {
-    mockPhase1 = () => ({
-      subs: [
-        makeMeta(100, 1000),
-        makeMeta(99, 2000),
-        { ...makeMeta(98, 0), contestId: 77 },
-      ],
-      morePages: false,
+  it('문제 번호 필터: submissions 전체가 아니라 problem_id 검색 URL만 순회하고 기존 캐시는 무시한다', async () => {
+    await saveCache(tempDir, {
+      lastSubmissionId: 50000,
+      pageNum: 5,
+      complete: false,
+      submissions: [makeMeta(50000, 9999)],
     });
 
-    mockPhase2 = (url) => {
-      if (url.endsWith('/100')) {
-        return { sourceCode: 'int main() {}', resolvedProblemId: 1000 };
-      }
-      if (url.endsWith('/98')) {
-        return { sourceCode: 'contest code', resolvedProblemId: 3000 };
-      }
-      throw new Error(`unexpected source fetch: ${url}`);
+    const responses: Record<string, { subs: Omit<Submission, 'sourceCode'>[]; morePages: boolean }> = {
+      'https://www.acmicpc.net/status?problem_id=1000&user_id=testuser': {
+        subs: [makeMeta(100, 1000), makeMeta(99, 1000)],
+        morePages: true,
+      },
+      'https://www.acmicpc.net/status?problem_id=1000&user_id=testuser&top=98': {
+        subs: [makeMeta(98, 1000)],
+        morePages: false,
+      },
+      'https://www.acmicpc.net/status?problem_id=2000&user_id=testuser': {
+        subs: [makeMeta(70, 2000)],
+        morePages: false,
+      },
     };
+    mockPhase1 = (url) => responses[url] ?? { subs: [], morePages: false };
 
-    const progressPath = join(tempDir, 'progress.json');
-    const progress = new ProgressTracker(progressPath);
+    const progress = new ProgressTracker(join(tempDir, 'progress.json'));
+    for (const submissionId of [100, 99, 98, 70]) {
+      progress.markCompleted('submissions', submissionId);
+    }
 
     const result = await scrapeSubmissions(
       {} as BrowserContext,
-      makeConfig(tempDir, false, { problemIds: [1000] }),
+      makeConfig(tempDir, true, { problemIds: [1000, 2000] }),
       noopLimiter as any,
       progress,
     );
 
-    expect(result.map((submission) => submission.submissionId)).toEqual([100]);
-    expect(calledUrls.filter((url) => url.includes('/source/')).sort()).toEqual([
-      'https://www.acmicpc.net/source/100',
-      'https://www.acmicpc.net/source/98',
+    expect(result.map((submission) => submission.submissionId)).toEqual([100, 99, 98, 70]);
+    expect(statusUrls()).toEqual([
+      'https://www.acmicpc.net/status?problem_id=1000&user_id=testuser',
+      'https://www.acmicpc.net/status?problem_id=1000&user_id=testuser&top=98',
+      'https://www.acmicpc.net/status?problem_id=2000&user_id=testuser',
     ]);
-
-    const cache = await loadCache(tempDir);
-    expect(
-      cache?.submissions.find((submission) => submission.submissionId === 98)?.problemId,
-    ).toBe(3000);
-
-    calledUrls.length = 0;
-
-    const resumedProgress = new ProgressTracker(progressPath);
-    await resumedProgress.load();
-
-    await scrapeSubmissions(
-      {} as BrowserContext,
-      makeConfig(tempDir, true, { problemIds: [1000] }),
-      noopLimiter as any,
-      resumedProgress,
-    );
-
     expect(calledUrls.filter((url) => url.includes('/source/'))).toEqual([]);
   });
 });

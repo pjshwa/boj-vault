@@ -32,6 +32,22 @@ export interface SubmissionListCache {
 
 const CACHE_FILENAME = 'submissions-cache.json';
 
+function buildStatusUrl(
+  user: string,
+  lastSubmissionId?: number,
+  problemId?: number,
+): string {
+  const params = new URLSearchParams();
+  if (problemId !== undefined) {
+    params.set('problem_id', String(problemId));
+  }
+  params.set('user_id', user);
+  if (lastSubmissionId !== undefined) {
+    params.set('top', String(lastSubmissionId - 1));
+  }
+  return `https://www.acmicpc.net/status?${params.toString()}`;
+}
+
 export async function loadCache(outputDir: string): Promise<SubmissionListCache | null> {
   try {
     const raw = await readFile(join(outputDir, CACHE_FILENAME), 'utf-8');
@@ -115,6 +131,7 @@ export async function scrapeSubmissions(
 ): Promise<Submission[]> {
   const log = createLogger('submissions');
   const problemFilterActive = hasProblemFilter(config);
+  const cacheEnabled = !problemFilterActive;
 
   // ------------------------------------------------------------------
   // Phase 1: Collect submission list by paginating through /status
@@ -127,6 +144,9 @@ export async function scrapeSubmissions(
   let phase1Complete = false;
 
   const persistCache = async (complete: boolean) => {
+    if (!cacheEnabled) {
+      return;
+    }
     await saveCache(config.outputDir, {
       lastSubmissionId,
       pageNum,
@@ -136,7 +156,7 @@ export async function scrapeSubmissions(
   };
 
   // Resume: load cache or migrate from existing files on disk
-  if (config.resume) {
+  if (config.resume && cacheEnabled) {
     let cache = await loadCache(config.outputDir);
 
     if (!cache) {
@@ -165,55 +185,114 @@ export async function scrapeSubmissions(
   if (!phase1Complete) {
     let reachedEnd = false;
 
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      pageNum++;
+    if (problemFilterActive) {
+      log.info(
+        `문제 번호별 status 조회로 범위를 좁혀 수집합니다 ` +
+          `[${formatProblemIds(config.problemIds ?? [])}]`,
+      );
 
-      // Build URL: first page has no &top= param, subsequent pages use &top=lastId-1
-      let url = `https://www.acmicpc.net/status?user_id=${config.user}`;
-      if (lastSubmissionId !== undefined) {
-        url += `&top=${lastSubmissionId - 1}`;
+      const seenSubmissionIds = new Set<number>();
+      let firstFetch = true;
+
+      for (const problemId of config.problemIds ?? []) {
+        let scopedLastSubmissionId: number | undefined;
+        let scopedPageNum = 0;
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const nextPageNum = scopedPageNum + 1;
+          const url = buildStatusUrl(config.user, scopedLastSubmissionId, problemId);
+
+          if (!firstFetch) {
+            await rateLimiter.waitPagination();
+          }
+          firstFetch = false;
+
+          const { subs, morePages } = await withPage(context, url, async (page) => {
+            const subs = await parseSubmissionTable(page);
+            const morePages = subs.length > 0 ? await hasNextPage(page) : false;
+            return { subs, morePages };
+          });
+
+          const submissions = subs;
+          if (submissions.length === 0) {
+            log.info(`문제 #${problemId} 페이지 ${nextPageNum}: 제출 없음 — 수집 종료`);
+            break;
+          }
+
+          scopedPageNum = nextPageNum;
+          scopedLastSubmissionId = submissions[submissions.length - 1].submissionId;
+
+          let added = 0;
+          for (const submission of submissions) {
+            if (seenSubmissionIds.has(submission.submissionId)) {
+              continue;
+            }
+            seenSubmissionIds.add(submission.submissionId);
+            allSubmissions.push(submission);
+            added++;
+          }
+
+          log.info(
+            `문제 #${problemId} 페이지 ${scopedPageNum} 수집 완료 ` +
+              `(신규 ${added}건, 누적 ${allSubmissions.length}건)`,
+          );
+
+          if (!morePages) {
+            log.info(`문제 #${problemId}: 마지막 페이지 도달 — 수집 종료`);
+            break;
+          }
+        }
       }
 
-      const { subs, morePages } = await withPage(context, url, async (page) => {
-        const subs = await parseSubmissionTable(page);
-        const morePages = subs.length > 0 ? await hasNextPage(page) : false;
-        return { subs, morePages };
-      });
+      reachedEnd = true;
+    } else {
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        pageNum++;
 
-      const submissions = subs;
+        const url = buildStatusUrl(config.user, lastSubmissionId);
 
-      // Stop if the page returned no submissions
-      if (submissions.length === 0) {
-        log.info(`페이지 ${pageNum}: 제출 없음 — 수집 종료`);
-        reachedEnd = true;
-        break;
+        const { subs, morePages } = await withPage(context, url, async (page) => {
+          const subs = await parseSubmissionTable(page);
+          const morePages = subs.length > 0 ? await hasNextPage(page) : false;
+          return { subs, morePages };
+        });
+
+        const submissions = subs;
+
+        // Stop if the page returned no submissions
+        if (submissions.length === 0) {
+          log.info(`페이지 ${pageNum}: 제출 없음 — 수집 종료`);
+          reachedEnd = true;
+          break;
+        }
+
+        allSubmissions.push(...submissions);
+        log.info(`페이지 ${pageNum} 수집 완료 (${allSubmissions.length}건)`);
+
+        // Update lastSubmissionId for next page pagination
+        lastSubmissionId = submissions[submissions.length - 1].submissionId;
+
+        // Save cache incrementally after each page
+        await persistCache(false);
+
+        // Stop if limit reached
+        if (config.limit && allSubmissions.length >= config.limit) {
+          allSubmissions.length = config.limit;
+          log.info(`제한 도달 (${config.limit}건) — 수집 종료`);
+          break;
+        }
+
+        // Check if there are more pages
+        if (!morePages) {
+          log.info('마지막 페이지 도달 — 수집 종료');
+          reachedEnd = true;
+          break;
+        }
+
+        await rateLimiter.waitPagination();
       }
-
-      allSubmissions.push(...submissions);
-      log.info(`페이지 ${pageNum} 수집 완료 (${allSubmissions.length}건)`);
-
-      // Update lastSubmissionId for next page pagination
-      lastSubmissionId = submissions[submissions.length - 1].submissionId;
-
-      // Save cache incrementally after each page
-      await persistCache(false);
-
-      // Stop if limit reached
-      if (!problemFilterActive && config.limit && allSubmissions.length >= config.limit) {
-        allSubmissions.length = config.limit;
-        log.info(`제한 도달 (${config.limit}건) — 수집 종료`);
-        break;
-      }
-
-      // Check if there are more pages
-      if (!morePages) {
-        log.info('마지막 페이지 도달 — 수집 종료');
-        reachedEnd = true;
-        break;
-      }
-
-      await rateLimiter.waitPagination();
     }
 
     // Only mark complete when all pages have been fetched

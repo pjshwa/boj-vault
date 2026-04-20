@@ -128,7 +128,7 @@ npm start -- --user <handle> --problem 1000,1001,1002
 npm start -- --user <handle> --delay 5
 ```
 
-`--problem`은 `submissions`, `authored`, `reviewed`, `solved`, `corrected`, `dataadded`, `board`에 적용됩니다. `profile`은 문제 번호와 직접 연결되지 않으므로, `--problem`을 쓰면 기본 전체 백업에서도 자동으로 건너뜁니다.
+`--problem`은 `submissions`, `authored`, `reviewed`, `solved`, `corrected`, `dataadded`, `board`에 적용됩니다. `submissions`는 `https://www.acmicpc.net/status?problem_id=<id>&user_id=<handle>` 형태로 범위를 좁혀 조회합니다. `profile`은 문제 번호와 직접 연결되지 않으므로, `--problem`을 쓰면 기본 전체 백업에서도 자동으로 건너뜁니다.
 
 ## 중단/재개
 
