@@ -122,6 +122,7 @@ export interface BackupConfig {
   outputDir: string;
   delay: number;
   only?: string;   // 'submissions' | 'authored' | 'reviewed' | 'solved' | 'profile' | 'corrected' | 'dataadded' | 'board'
+  problemIds?: number[];
   resume: boolean;
   limit?: number;  // max items to collect per category
 }

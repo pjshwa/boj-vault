@@ -1,5 +1,5 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { BrowserContext } from 'playwright';
@@ -152,5 +152,47 @@ describe('scrapeReviewed — pagination integration', () => {
       'https://www.acmicpc.net/problem/11',
       'https://www.acmicpc.net/problem/22',
     ]);
+  });
+
+  it('문제 번호 필터가 있으면 해당 문제만 개별 스크래핑하고 index도 필터링한다', async () => {
+    const baseUrl = 'https://www.acmicpc.net/problemset?sort=no_asc&author=u&author_type=19';
+    responder = (url) => {
+      if (/\/problem\/\d+$/.test(url)) {
+        return { problem: { problemId: 0, title: '', timeLimit: '', memoryLimit: '', fetchedAt: '' } };
+      }
+      if (url === `${baseUrl}&page=1`) {
+        return {
+          problems: [
+            { problemId: 1, title: 'p1' },
+            { problemId: 2, title: 'p2' },
+            { problemId: 3, title: 'p3' },
+          ],
+          hasNext: false,
+        };
+      }
+      return { problems: [], hasNext: false };
+    };
+
+    const progress = new ProgressTracker(join(tempDir, 'progress.json'));
+    await scrapeReviewed(
+      {} as BrowserContext,
+      {
+        user: 'u',
+        cdpPort: 9222,
+        outputDir: tempDir,
+        delay: 0,
+        resume: false,
+        problemIds: [2, 99],
+      },
+      noopLimiter as any,
+      progress,
+    );
+
+    const problemUrls = calledUrls.filter((u) => /\/problem\/\d+$/.test(u));
+    expect(problemUrls).toEqual(['https://www.acmicpc.net/problem/2']);
+
+    const index = JSON.parse(await readFile(join(tempDir, 'reviewed', 'index.json'), 'utf-8'));
+    expect(index.totalCount).toBe(1);
+    expect(index.problems).toEqual([{ problemId: 2, title: 'p2' }]);
   });
 });

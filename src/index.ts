@@ -15,6 +15,10 @@ import { scrapeDataAdded } from './scrapers/dataadded.js';
 import { scrapeBoard } from './scrapers/board.js';
 import { buildSubmissionIndex, buildMetadata } from './writers/index-builder.js';
 import { writeJson } from './writers/json-writer.js';
+import {
+  formatProblemIds,
+  hasProblemFilter,
+} from './core/problem-filter.js';
 
 export async function runBackup(config: BackupConfig): Promise<void> {
   const log = createLogger('main');
@@ -42,8 +46,9 @@ export async function runBackup(config: BackupConfig): Promise<void> {
   const { browser, context, page } = await connectBrowser(config.cdpPort);
   display.complete('브라우저 연결 완료');
 
+  const problemFilterActive = hasProblemFilter(config);
   const shouldRun = (category: string) =>
-    !config.only || config.only === category;
+    problemFilterActive ? category === 'submissions' : !config.only || config.only === category;
 
   const stats = {
     submissions: 0,
@@ -56,6 +61,11 @@ export async function runBackup(config: BackupConfig): Promise<void> {
   };
 
   try {
+    if (problemFilterActive) {
+      log.info(`문제 번호 필터 활성화: ${formatProblemIds(config.problemIds ?? [])}`);
+      log.info('문제 번호가 주어졌으므로 submissions만 백업합니다');
+    }
+
     // 1. Profile backup
     if (shouldRun('profile')) {
       display.startPhase('프로필 백업 시작...');

@@ -4,6 +4,7 @@ import type { BackupConfig, BoardIndex, BoardPost } from '../types/index.js';
 import { RateLimiter } from '../core/rate-limiter.js';
 import { ProgressTracker } from '../core/progress.js';
 import { createLogger, withPage, ensureDir } from '../core/utils.js';
+import { filterOptionalProblemItems } from '../core/problem-filter.js';
 import { paginateBoardList } from '../parsers/board-paginate.js';
 import { parseBoardPost } from '../parsers/board-post.js';
 import { writeJson, writeHtml } from '../writers/json-writer.js';
@@ -30,7 +31,8 @@ export async function scrapeBoard(
   );
   log.info(`게시글 ${rows.length}개 발견`);
 
-  const limited = config.limit ? rows.slice(0, config.limit) : rows;
+  const filteredRows = filterOptionalProblemItems(rows, config, log, '게시판 글 목록');
+  const limited = config.limit ? filteredRows.slice(0, config.limit) : filteredRows;
 
   const indexEntries: BoardIndex['posts'] = [];
   const byCategory: Record<string, number> = {};
@@ -131,5 +133,5 @@ export async function scrapeBoard(
   await writeJson(join(config.outputDir, 'board', 'index.json'), index);
   log.info(`게시판 인덱스 저장: ${join(config.outputDir, 'board', 'index.json')}`);
 
-  return rows.length;
+  return filteredRows.length;
 }

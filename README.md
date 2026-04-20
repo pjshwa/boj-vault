@@ -119,9 +119,17 @@ npm start -- --user <handle> --cdp-port 9333
 # 카테고리별 최대 수집 개수 제한
 npm start -- --user <handle> --limit 10
 
+# 특정 문제 번호만 백업 (반복 지정 또는 쉼표 구분)
+npm start -- --user <handle> --problem 1000
+npm start -- --user <handle> --problem 1000 --problem 1001
+npm start -- --user <handle> --problem 1000,1001,1002
+npm start -- --user <handle> --only submissions --problem 1000
+
 # 요청 간 딜레이 조정 (초 단위, 기본 4초)
 npm start -- --user <handle> --delay 5
 ```
+
+`--problem`이 있으면 `submissions`만 백업합니다. 즉 `authored`, `reviewed`, `solved`, `corrected`, `dataadded`, `board`, `profile`은 실행하지 않습니다. 제출 목록은 `https://www.acmicpc.net/status?problem_id=<id>&user_id=<handle>` 형태로 범위를 좁혀 조회합니다. `--only`를 같이 쓸 때도 `submissions`만 허용합니다.
 
 ## 중단/재개
 
@@ -219,6 +227,7 @@ BOJ 서버에 부담을 주지 않도록 보수적인 딜레이를 적용합니�
 - 오타 수정 기여 문제 백업 추가 — `--only corrected` (`/problemset?author_type=3`)
 - 데이터 추가 기여 문제 백업 추가 — `--only dataadded` (`/problemset?author_type=6`)
 - BOJ 게시판에 본인이 쓴 글 백업 추가 — `--only board` (카테고리별 디렉토리, 댓글 포함, 전체 페이지 순회 및 `--resume` 지원)
+- 특정 문제 번호만 골라 제출 기록을 스크래핑하는 `--problem` 옵션 추가 (`submissions` 전용)
 
 ### 2026-04-17
 

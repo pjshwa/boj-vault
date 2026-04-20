@@ -50,13 +50,18 @@ function makeMeta(id: number, problemId: number): Omit<Submission, 'sourceCode'>
   };
 }
 
-function makeConfig(dir: string, resume: boolean): BackupConfig {
+function makeConfig(
+  dir: string,
+  resume: boolean,
+  overrides: Partial<BackupConfig> = {},
+): BackupConfig {
   return {
     user: 'testuser',
     cdpPort: 9222,
     outputDir: dir,
     delay: 0,
     resume,
+    ...overrides,
   };
 }
 
@@ -329,5 +334,50 @@ describe('scrapeSubmissions — resume 점프 동작', () => {
     expect(meta.submissionId).toBe(88888);
     expect(meta.contestId).toBe(500);
     expect(meta.problemId).toBe(0);
+  });
+
+  it('문제 번호 필터: submissions 전체가 아니라 problem_id 검색 URL만 순회하고 기존 캐시는 무시한다', async () => {
+    await saveCache(tempDir, {
+      lastSubmissionId: 50000,
+      pageNum: 5,
+      complete: false,
+      submissions: [makeMeta(50000, 9999)],
+    });
+
+    const responses: Record<string, { subs: Omit<Submission, 'sourceCode'>[]; morePages: boolean }> = {
+      'https://www.acmicpc.net/status?problem_id=1000&user_id=testuser': {
+        subs: [makeMeta(100, 1000), makeMeta(99, 1000)],
+        morePages: true,
+      },
+      'https://www.acmicpc.net/status?problem_id=1000&user_id=testuser&top=98': {
+        subs: [makeMeta(98, 1000)],
+        morePages: false,
+      },
+      'https://www.acmicpc.net/status?problem_id=2000&user_id=testuser': {
+        subs: [makeMeta(70, 2000)],
+        morePages: false,
+      },
+    };
+    mockPhase1 = (url) => responses[url] ?? { subs: [], morePages: false };
+
+    const progress = new ProgressTracker(join(tempDir, 'progress.json'));
+    for (const submissionId of [100, 99, 98, 70]) {
+      progress.markCompleted('submissions', submissionId);
+    }
+
+    const result = await scrapeSubmissions(
+      {} as BrowserContext,
+      makeConfig(tempDir, true, { problemIds: [1000, 2000] }),
+      noopLimiter as any,
+      progress,
+    );
+
+    expect(result.map((submission) => submission.submissionId)).toEqual([100, 99, 98, 70]);
+    expect(statusUrls()).toEqual([
+      'https://www.acmicpc.net/status?problem_id=1000&user_id=testuser',
+      'https://www.acmicpc.net/status?problem_id=1000&user_id=testuser&top=98',
+      'https://www.acmicpc.net/status?problem_id=2000&user_id=testuser',
+    ]);
+    expect(calledUrls.filter((url) => url.includes('/source/'))).toEqual([]);
   });
 });

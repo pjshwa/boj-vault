@@ -4,10 +4,15 @@ import { Command, Option } from 'commander';
 import { resolveConfig } from './config.js';
 import { Display } from './display.js';
 import { runBackup } from '../index.js';
+import { formatProblemIds } from '../core/problem-filter.js';
 
 const display = new Display();
 
 const program = new Command();
+
+function collectProblemOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
 
 program
   .name('boj-vault')
@@ -25,6 +30,12 @@ program
     new Option('--only <category>', '특정 카테고리만 백업')
       .choices(['submissions', 'authored', 'reviewed', 'solved', 'profile', 'corrected', 'dataadded', 'board']),
   )
+  .option(
+    '--problem <id>',
+    '특정 문제 번호만 백업 (반복 지정 또는 쉼표 구분 가능)',
+    collectProblemOption,
+    [],
+  )
   .option('--resume', '중단된 백업 재개', false)
   .option('--limit <count>', '카테고리별 최대 수집 개수')
   .action(async (opts) => {
@@ -35,6 +46,7 @@ program
         output: opts.output,
         delay: Number(opts.delay),
         only: opts.only,
+        problem: opts.problem,
         resume: opts.resume,
         limit: opts.limit,
       });
@@ -50,6 +62,9 @@ program
       console.log(`  요청 딜레이:  ${config.delay}초`);
       if (config.only) {
         console.log(`  대상:         ${config.only}`);
+      }
+      if (config.problemIds && config.problemIds.length > 0) {
+        console.log(`  문제 번호:    ${formatProblemIds(config.problemIds)}`);
       }
       if (config.resume) {
         console.log(`  모드:         이어서 백업`);

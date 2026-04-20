@@ -13,6 +13,11 @@ import {
 import { writeJson, writeSourceCode } from '../writers/json-writer.js';
 import { ensureDir, createLogger, withPage, langToExt } from '../core/utils.js';
 import type { Logger } from '../core/utils.js';
+import {
+  formatProblemIds,
+  hasProblemFilter,
+  matchesProblemFilter,
+} from '../core/problem-filter.js';
 
 // ------------------------------------------------------------------
 // Submission list cache — Phase 1 resume support
@@ -26,6 +31,22 @@ export interface SubmissionListCache {
 }
 
 const CACHE_FILENAME = 'submissions-cache.json';
+
+function buildStatusUrl(
+  user: string,
+  lastSubmissionId?: number,
+  problemId?: number,
+): string {
+  const params = new URLSearchParams();
+  if (problemId !== undefined) {
+    params.set('problem_id', String(problemId));
+  }
+  params.set('user_id', user);
+  if (lastSubmissionId !== undefined) {
+    params.set('top', String(lastSubmissionId - 1));
+  }
+  return `https://www.acmicpc.net/status?${params.toString()}`;
+}
 
 export async function loadCache(outputDir: string): Promise<SubmissionListCache | null> {
   try {
@@ -109,6 +130,8 @@ export async function scrapeSubmissions(
   progress: ProgressTracker,
 ): Promise<Submission[]> {
   const log = createLogger('submissions');
+  const problemFilterActive = hasProblemFilter(config);
+  const cacheEnabled = !problemFilterActive;
 
   // ------------------------------------------------------------------
   // Phase 1: Collect submission list by paginating through /status
@@ -120,8 +143,20 @@ export async function scrapeSubmissions(
   let lastSubmissionId: number | undefined;
   let phase1Complete = false;
 
+  const persistCache = async (complete: boolean) => {
+    if (!cacheEnabled) {
+      return;
+    }
+    await saveCache(config.outputDir, {
+      lastSubmissionId,
+      pageNum,
+      complete,
+      submissions: allSubmissions.map(({ sourceCode: _, ...rest }) => rest),
+    });
+  };
+
   // Resume: load cache or migrate from existing files on disk
-  if (config.resume) {
+  if (config.resume && cacheEnabled) {
     let cache = await loadCache(config.outputDir);
 
     if (!cache) {
@@ -150,70 +185,120 @@ export async function scrapeSubmissions(
   if (!phase1Complete) {
     let reachedEnd = false;
 
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      pageNum++;
+    if (problemFilterActive) {
+      log.info(
+        `문제 번호별 status 조회로 범위를 좁혀 수집합니다 ` +
+          `[${formatProblemIds(config.problemIds ?? [])}]`,
+      );
 
-      // Build URL: first page has no &top= param, subsequent pages use &top=lastId-1
-      let url = `https://www.acmicpc.net/status?user_id=${config.user}`;
-      if (lastSubmissionId !== undefined) {
-        url += `&top=${lastSubmissionId - 1}`;
+      const seenSubmissionIds = new Set<number>();
+      let firstFetch = true;
+
+      for (const problemId of config.problemIds ?? []) {
+        let scopedLastSubmissionId: number | undefined;
+        let scopedPageNum = 0;
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const nextPageNum = scopedPageNum + 1;
+          const url = buildStatusUrl(config.user, scopedLastSubmissionId, problemId);
+
+          if (!firstFetch) {
+            await rateLimiter.waitPagination();
+          }
+          firstFetch = false;
+
+          const { subs, morePages } = await withPage(context, url, async (page) => {
+            const subs = await parseSubmissionTable(page);
+            const morePages = subs.length > 0 ? await hasNextPage(page) : false;
+            return { subs, morePages };
+          });
+
+          const submissions = subs;
+          if (submissions.length === 0) {
+            log.info(`문제 #${problemId} 페이지 ${nextPageNum}: 제출 없음 — 수집 종료`);
+            break;
+          }
+
+          scopedPageNum = nextPageNum;
+          scopedLastSubmissionId = submissions[submissions.length - 1].submissionId;
+
+          let added = 0;
+          for (const submission of submissions) {
+            if (seenSubmissionIds.has(submission.submissionId)) {
+              continue;
+            }
+            seenSubmissionIds.add(submission.submissionId);
+            allSubmissions.push(submission);
+            added++;
+          }
+
+          log.info(
+            `문제 #${problemId} 페이지 ${scopedPageNum} 수집 완료 ` +
+              `(신규 ${added}건, 누적 ${allSubmissions.length}건)`,
+          );
+
+          if (!morePages) {
+            log.info(`문제 #${problemId}: 마지막 페이지 도달 — 수집 종료`);
+            break;
+          }
+        }
       }
 
-      const { subs, morePages } = await withPage(context, url, async (page) => {
-        const subs = await parseSubmissionTable(page);
-        const morePages = subs.length > 0 ? await hasNextPage(page) : false;
-        return { subs, morePages };
-      });
+      reachedEnd = true;
+    } else {
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        pageNum++;
 
-      const submissions = subs;
+        const url = buildStatusUrl(config.user, lastSubmissionId);
 
-      // Stop if the page returned no submissions
-      if (submissions.length === 0) {
-        log.info(`페이지 ${pageNum}: 제출 없음 — 수집 종료`);
-        reachedEnd = true;
-        break;
+        const { subs, morePages } = await withPage(context, url, async (page) => {
+          const subs = await parseSubmissionTable(page);
+          const morePages = subs.length > 0 ? await hasNextPage(page) : false;
+          return { subs, morePages };
+        });
+
+        const submissions = subs;
+
+        // Stop if the page returned no submissions
+        if (submissions.length === 0) {
+          log.info(`페이지 ${pageNum}: 제출 없음 — 수집 종료`);
+          reachedEnd = true;
+          break;
+        }
+
+        allSubmissions.push(...submissions);
+        log.info(`페이지 ${pageNum} 수집 완료 (${allSubmissions.length}건)`);
+
+        // Update lastSubmissionId for next page pagination
+        lastSubmissionId = submissions[submissions.length - 1].submissionId;
+
+        // Save cache incrementally after each page
+        await persistCache(false);
+
+        // Stop if limit reached
+        if (config.limit && allSubmissions.length >= config.limit) {
+          allSubmissions.length = config.limit;
+          log.info(`제한 도달 (${config.limit}건) — 수집 종료`);
+          break;
+        }
+
+        // Check if there are more pages
+        if (!morePages) {
+          log.info('마지막 페이지 도달 — 수집 종료');
+          reachedEnd = true;
+          break;
+        }
+
+        await rateLimiter.waitPagination();
       }
-
-      allSubmissions.push(...submissions);
-      log.info(`페이지 ${pageNum} 수집 완료 (${allSubmissions.length}건)`);
-
-      // Update lastSubmissionId for next page pagination
-      lastSubmissionId = submissions[submissions.length - 1].submissionId;
-
-      // Save cache incrementally after each page
-      await saveCache(config.outputDir, {
-        lastSubmissionId,
-        pageNum,
-        complete: false,
-        submissions: allSubmissions.map(({ sourceCode: _, ...rest }) => rest),
-      });
-
-      // Stop if limit reached
-      if (config.limit && allSubmissions.length >= config.limit) {
-        allSubmissions.length = config.limit;
-        log.info(`제한 도달 (${config.limit}건) — 수집 종료`);
-        break;
-      }
-
-      // Check if there are more pages
-      if (!morePages) {
-        log.info('마지막 페이지 도달 — 수집 종료');
-        reachedEnd = true;
-        break;
-      }
-
-      await rateLimiter.waitPagination();
     }
 
     // Only mark complete when all pages have been fetched
+    phase1Complete = reachedEnd;
     if (reachedEnd) {
-      await saveCache(config.outputDir, {
-        lastSubmissionId,
-        pageNum,
-        complete: true,
-        submissions: allSubmissions.map(({ sourceCode: _, ...rest }) => rest),
-      });
+      await persistCache(true);
     }
   }
 
@@ -222,15 +307,42 @@ export async function scrapeSubmissions(
   // ------------------------------------------------------------------
   // Phase 2: Collect source code for each submission
   // ------------------------------------------------------------------
-  const total = allSubmissions.length;
+  const targets = problemFilterActive
+    ? allSubmissions.filter(
+        (submission) =>
+          submission.problemId === 0 || matchesProblemFilter(config, submission.problemId),
+      )
+    : allSubmissions;
+
+  if (problemFilterActive) {
+    const unresolved = targets.filter((submission) => submission.problemId === 0).length;
+    log.info(
+      `문제 번호 필터 적용: ${targets.length}건 대상 ` +
+        `[${formatProblemIds(config.problemIds ?? [])}]`,
+    );
+    if (unresolved > 0) {
+      log.info(`대회 제출 ${unresolved}건은 소스 페이지에서 실제 문제 번호를 다시 확인합니다`);
+    }
+  }
+
+  const collected: Submission[] = [];
+  const total = targets.length;
   let current = 0;
 
-  for (const submission of allSubmissions) {
+  for (const submission of targets) {
+    if (problemFilterActive && config.limit && collected.length >= config.limit) {
+      log.info(`제한 도달 (${config.limit}건) — 수집 종료`);
+      break;
+    }
+
     current++;
     const { submissionId } = submission;
 
     // Skip already completed submissions (resume support)
     if (progress.isCompleted('submissions', submissionId)) {
+      if (!problemFilterActive || matchesProblemFilter(config, submission.problemId)) {
+        collected.push(submission);
+      }
       continue;
     }
 
@@ -265,6 +377,17 @@ export async function scrapeSubmissions(
         `제출 ${submissionId}: 대회 문제 ID 확인 → ${resolvedProblemId}`,
       );
       submission.problemId = resolvedProblemId;
+      await persistCache(phase1Complete);
+    }
+
+    if (problemFilterActive && !matchesProblemFilter(config, submission.problemId)) {
+      if (submission.problemId === 0) {
+        log.warn(`제출 ${submissionId}: 실제 문제 번호를 확인하지 못해 필터 대상에서 제외`);
+      } else {
+        log.info(`제출 ${submissionId}: 문제 번호 필터와 일치하지 않아 저장 건너뜀 (#${submission.problemId})`);
+      }
+      await rateLimiter.wait();
+      continue;
     }
 
     // Save submission files
@@ -302,11 +425,13 @@ export async function scrapeSubmissions(
     // Mark completed and persist progress
     progress.markCompleted('submissions', submissionId);
     await progress.save();
+    collected.push(submission);
 
     // Rate limit between source-code fetches
     await rateLimiter.wait();
   }
 
-  log.info(`소스코드 수집 완료 (${total}건)`);
-  return allSubmissions;
+  const result = problemFilterActive ? collected : allSubmissions;
+  log.info(`소스코드 수집 완료 (${result.length}건)`);
+  return result;
 }
