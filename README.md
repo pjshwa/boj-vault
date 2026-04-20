@@ -119,9 +119,16 @@ npm start -- --user <handle> --cdp-port 9333
 # 카테고리별 최대 수집 개수 제한
 npm start -- --user <handle> --limit 10
 
+# 특정 문제 번호만 백업 (반복 지정 또는 쉼표 구분)
+npm start -- --user <handle> --problem 1000
+npm start -- --user <handle> --problem 1000 --problem 1001
+npm start -- --user <handle> --problem 1000,1001,1002
+
 # 요청 간 딜레이 조정 (초 단위, 기본 4초)
 npm start -- --user <handle> --delay 5
 ```
+
+`--problem`은 `submissions`, `authored`, `reviewed`, `solved`, `corrected`, `dataadded`, `board`에 적용됩니다. `profile`은 문제 번호와 직접 연결되지 않으므로, `--problem`을 쓰면 기본 전체 백업에서도 자동으로 건너뜁니다.
 
 ## 중단/재개
 
@@ -219,6 +226,7 @@ BOJ 서버에 부담을 주지 않도록 보수적인 딜레이를 적용합니�
 - 오타 수정 기여 문제 백업 추가 — `--only corrected` (`/problemset?author_type=3`)
 - 데이터 추가 기여 문제 백업 추가 — `--only dataadded` (`/problemset?author_type=6`)
 - BOJ 게시판에 본인이 쓴 글 백업 추가 — `--only board` (카테고리별 디렉토리, 댓글 포함, 전체 페이지 순회 및 `--resume` 지원)
+- 특정 문제 번호만 골라 스크래핑하는 `--problem` 옵션 추가 (`submissions`, `authored`, `reviewed`, `solved`, `corrected`, `dataadded`, `board`)
 
 ### 2026-04-17
 

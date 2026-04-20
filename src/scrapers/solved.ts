@@ -4,6 +4,7 @@ import type { BackupConfig } from '../types/index.js';
 import { RateLimiter } from '../core/rate-limiter.js';
 import { ProgressTracker } from '../core/progress.js';
 import { createLogger, withPage, ensureDir } from '../core/utils.js';
+import { filterProblemItems } from '../core/problem-filter.js';
 import { parseProblemPage } from '../parsers/problem.js';
 import { paginateProblemList } from '../parsers/paginate.js';
 import { writeJson, writeHtml } from '../writers/json-writer.js';
@@ -63,17 +64,21 @@ export async function scrapeSolved(
 
   log.info(`맞은 문제 ${problems.length}개 발견`);
 
+  const filteredProblems = filterProblemItems(problems, config, log, '맞은 문제 목록');
+
   // Apply limit
-  if (config.limit && problems.length > config.limit) {
-    problems = problems.slice(0, config.limit);
+  if (config.limit && filteredProblems.length > config.limit) {
+    problems = filteredProblems.slice(0, config.limit);
     log.info(`제한 적용: ${config.limit}개만 수집`);
+  } else {
+    problems = filteredProblems;
   }
 
   // 4. Save the index
   const indexPath = join(config.outputDir, 'solved', 'index.json');
   await writeJson(indexPath, {
-    totalCount: problems.length,
-    problems,
+    totalCount: filteredProblems.length,
+    problems: filteredProblems,
     lastUpdated: new Date().toISOString(),
   });
   log.info(`인덱스 저장: ${indexPath}`);

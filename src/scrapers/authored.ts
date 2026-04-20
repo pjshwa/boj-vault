@@ -4,6 +4,7 @@ import type { BackupConfig, AuthoredProblem } from '../types/index.js';
 import { RateLimiter } from '../core/rate-limiter.js';
 import { ProgressTracker } from '../core/progress.js';
 import { ensureDir, createLogger, withPage } from '../core/utils.js';
+import { filterProblemItems } from '../core/problem-filter.js';
 import { parseProblemPage } from '../parsers/problem.js';
 import { paginateProblemList } from '../parsers/paginate.js';
 import { writeJson, writeHtml } from '../writers/json-writer.js';
@@ -31,14 +32,16 @@ export async function scrapeAuthored(
   );
   log.info(`출제한 문제 ${problems.length}개 발견`);
 
+  const filteredProblems = filterProblemItems(problems, config, log, '출제한 문제 목록');
+
   // Apply limit
-  const limited = config.limit ? problems.slice(0, config.limit) : problems;
+  const limited = config.limit ? filteredProblems.slice(0, config.limit) : filteredProblems;
 
   // 3. Save the index
   const indexPath = join(config.outputDir, 'authored', 'index.json');
   await writeJson(indexPath, {
-    totalCount: problems.length,
-    problems,
+    totalCount: filteredProblems.length,
+    problems: filteredProblems,
     lastUpdated: new Date().toISOString(),
   });
   log.info(`인덱스 저장: ${indexPath}`);
